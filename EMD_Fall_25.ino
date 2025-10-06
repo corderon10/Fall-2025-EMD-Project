@@ -1,218 +1,236 @@
-/* 
+/*  
  Author: Nicholas Cordero 
  Date: 10/2/25
  About: Fall 2025 Project
  Revision #1
- */
+*/
 
-/* this porject includes 2 servo motors controlling the ultrasonic sensor and the steering shaft alongside 2 DC motors to control the rear wheels */
- 
+/* This project includes 2 servo motors controlling the ultrasonic sensor and 
+   the steering shaft alongside 2 DC motors to control the rear wheels */
+
 #include <Servo.h>
 #include <IRremote.h>
 
-enum MISSION_PHASE {                    // state definition
-    CONFIG, WAIT, GET_READINGS, STOP
+enum MISSION_PHASE {
+  CONFIG, WAIT, GET_READINGS, STOP
 };
 
-#define GREEN_LED       12
-#define IR              2
-#define SERVO           11
+#define GREEN_LED         12
+#define IR_PIN            2
 
-#define LEFT_MOTOR_EN   5          // must be a PWM compatible pin
-#define RIGHT_MOTOR_EN  6         // must be a PWM compatible pin
-#define LEFT_MOTOR_I1   7
-#define LEFT_MOTOR_I2   8
-#define RIGHT_MOTOR_I1  4
-#define RIGHT_MOTOR_I2  3
+#define SERVO_SENSOR_PIN  11
+#define SERVO_STEER_PIN   10
 
-#define TRIG                12            // trigger pin
-#define ECHO                8            // echo pin
-#define DISTANCE_THRESHOLD  20           // 20 cm clearance
-#define TIME_THRESHOLD      20000      // 20 seconds 
+#define LEFT_MOTOR_EN     5
+#define RIGHT_MOTOR_EN    6
+#define LEFT_MOTOR_I1     7
+#define LEFT_MOTOR_I2     8
+#define RIGHT_MOTOR_I1    4
+#define RIGHT_MOTOR_I2    3
 
-Servo myservo;
-IRrecv irrecv(IR);
+#define TRIG              9
+#define ECHO              13
+#define DISTANCE_THRESHOLD 20   // 20 cm clearance
+#define TIME_THRESHOLD     20000 // 20 seconds
+
+Servo servoSensor;   // controls ultrasonic scan
+Servo servoSteering; // controls front wheel direction
+IRrecv irrecv(IR_PIN);
 decode_results results;
 
-int left_angle  =  45;   // left view in degrees
-int front_angle =  90;   // front view in degrees
-int right_angle =  135;   // right view in degrees
+int left_angle  = 45;
+int front_angle = 90;
+int right_angle = 135;
 
-int token;    // keep track of which part of the mission the vehicle is
-int cmdLeftMotor, cmdRightMotor, cmdServo;  // in terms of duty cycles
-int cmdDir;         // commanded direction of travel
-int IRPresence;     //  1: yes, 2: no
+int steeringCenter = 90; // straight
+int steeringLeft   = 60; // turn left
+int steeringRight  = 120; // turn right
 
-long timeElapse, timeOrigin;                // in terms of time ticks
+int token;
+int IRPresence = 0;
+long timeElapse, timeOrigin;
 
-////////////////////// Function Prototyping //////////////////////
-
+// ---------- Function Prototypes ----------
 void SetUpLED();
 void TurnOnGreenLED();
 void TurnOffGreenLED();
-
 void StartServo();
 void StopServo();
 void SetUpDCMotors();
 void StopDCMotors();
-
 void StartIR();
 void StopIR();
-
 void CheckIRPresence();
-void UpdateMotorCommands();  
+void UpdateMotorCommands();
 long GetDistance();
 long GetReadings(int);
-
 void RotateLeft();
 void RotateRight();
 void MoveForward();
-
 void SetTimeOrigin();
 void GetTimeElapse();
 
-//////////////////////  Function Definitions //////////////////////
+// ---------- LED ----------
+void SetUpLED() { pinMode(GREEN_LED, OUTPUT); }
+void TurnOnGreenLED(){ digitalWrite(GREEN_LED, HIGH); }
+void TurnOffGreenLED(){ digitalWrite(GREEN_LED, LOW); }
 
-// LED Functions //
-void SetUpLED() {
-pinMode(GREEN_LED, OUTPUT);
-}
-void TurnOnGreenLED(){
-  digitalWrite(GREEN_LED, HIGH);
-}
-void TurnOffGreenLED(){
-  digitalWrite(GREEN_LED, LOW);
-}
-
-// Servo Functions //
+// ---------- Servo ----------
 void StartServo() {
-    myservo.attach(SERVO);
+  servoSensor.attach(SERVO_SENSOR_PIN);
+  servoSteering.attach(SERVO_STEER_PIN);
+  servoSteering.write(steeringCenter); // center steering
 }
-
 void StopServo() {
-    myservo.detach();
+  servoSensor.detach();
+  servoSteering.detach();
 }
 
-
+// ---------- DC Motors ----------
 void SetUpDCMotors() {
+  pinMode(LEFT_MOTOR_I1, OUTPUT);
+  pinMode(LEFT_MOTOR_I2, OUTPUT);
+  pinMode(RIGHT_MOTOR_I1, OUTPUT);
+  pinMode(RIGHT_MOTOR_I2, OUTPUT);
   analogWrite(LEFT_MOTOR_EN, 0);
   analogWrite(RIGHT_MOTOR_EN, 0);
-}
-
-void StartIR() {
-    irrecv.enableIRIn(); // start the receiver
-}
-
-void StopIR() {
-    irrecv.disableIRIn(); // stop the receiver
 }
 
 void StopDCMotors() {
   analogWrite(LEFT_MOTOR_EN, 0);
   analogWrite(RIGHT_MOTOR_EN, 0);
+  digitalWrite(LEFT_MOTOR_I1, LOW);
+  digitalWrite(LEFT_MOTOR_I2, LOW);
+  digitalWrite(RIGHT_MOTOR_I1, LOW);
+  digitalWrite(RIGHT_MOTOR_I2, LOW);
 }
 
+// ---------- IR ----------
+void StartIR() { irrecv.enableIRIn(); }
+void StopIR() { irrecv.disableIRIn(); }
+
+void CheckIRPresence() {
+  if (irrecv.decode(&results)) {
+    IRPresence = 1; // any signal starts the mission
+    irrecv.resume(); 
+  }
+}
+
+// ---------- Time ----------
+void SetTimeOrigin() { timeOrigin = millis(); }
+void GetTimeElapse() { timeElapse = millis() - timeOrigin; }
+
+// ---------- Ultrasonic ----------
 long GetDistance() {
-  
   long duration;
-  digitalWrite(TRIG, LOW);  // Added this line
-  delayMicroseconds(2); // Added this line
-  digitalWrite(TRIG, HIGH);
-  delayMicroseconds(10); // Added this line
   digitalWrite(TRIG, LOW);
-  duration = pulseIn(ECHO, HIGH);
-  long distance = duration/58;
-  delay(50);
+  delayMicroseconds(2);
+  digitalWrite(TRIG, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG, LOW);
+  duration = pulseIn(ECHO, HIGH, 20000);
+  long distance = duration * 0.034 / 2;
+  delay(30);
   return distance;
 }
 
 long GetReadings(int angle) {
-  StartServo();
-  myservo.write(angle);
-  delay(50);
+  servoSensor.write(angle);
+  delay(250);
   long distance = GetDistance();
-  delay(50);
-  StopServo();
-  
   return distance;
 }
 
-void SetTimeOrigin() {
-  timeOrigin = millis();
+// ---------- Motion ----------
+void MoveForward() {
+  servoSteering.write(steeringCenter); // straight
+  digitalWrite(LEFT_MOTOR_I1, HIGH);
+  digitalWrite(LEFT_MOTOR_I2, LOW);
+  digitalWrite(RIGHT_MOTOR_I1, HIGH);
+  digitalWrite(RIGHT_MOTOR_I2, LOW);
+  analogWrite(LEFT_MOTOR_EN, 170);
+  analogWrite(RIGHT_MOTOR_EN, 170);
 }
 
-void GetTimeElapse() {
-  timeElapse = millis() - timeOrigin;
+void RotateLeft() {
+  servoSteering.write(steeringLeft); // turn left
+  digitalWrite(LEFT_MOTOR_I1, HIGH);
+  digitalWrite(LEFT_MOTOR_I2, LOW);
+  digitalWrite(RIGHT_MOTOR_I1, HIGH);
+  digitalWrite(RIGHT_MOTOR_I2, LOW);
+  analogWrite(LEFT_MOTOR_EN, 140);
+  analogWrite(RIGHT_MOTOR_EN, 160);
 }
 
-void CheckIRPresence() {}       // need to be built
-void UpdateMotorCommands() {}   // need to be built
+void RotateRight() {
+  servoSteering.write(steeringRight); // turn right
+  digitalWrite(LEFT_MOTOR_I1, HIGH);
+  digitalWrite(LEFT_MOTOR_I2, LOW);
+  digitalWrite(RIGHT_MOTOR_I1, HIGH);
+  digitalWrite(RIGHT_MOTOR_I2, LOW);
+  analogWrite(LEFT_MOTOR_EN, 160);
+  analogWrite(RIGHT_MOTOR_EN, 140);
+}
 
-void RotateLeft() {}
-void RotateRight() {}
-void MoveForward(){}
-
+// ---------- Main Program ----------
 void setup() {
-  // put your setup code here, to run once:
-
   Serial.begin(9600);
-  token = CONFIG; // the starting part is to configure all sensors/actuators
+  token = CONFIG;
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
   switch (token) {
-           
-      case CONFIG:
+    case CONFIG:
+      SetUpLED();
+      SetUpDCMotors();
+      StartIR();
+      StartServo();
+      TurnOffGreenLED();
+      pinMode(TRIG, OUTPUT);
+      pinMode(ECHO, INPUT);
+      token = WAIT;
+      break;
 
-          SetUpLED();
-          SetUpDCMotors();
-          StartIR();
-          TurnOffGreenLED();
-          pinMode(TRIG, OUTPUT);
-          pinMode(ECHO, INPUT);
-          token = WAIT;
-          break;
-        
-     case WAIT:
-      // do what is needed
-      //test if the condition is met before breaking out of this case
+    case WAIT:
+      CheckIRPresence();
+      if (IRPresence) {
+        token = GET_READINGS;
+        TurnOnGreenLED();
+        StopIR();
+        SetTimeOrigin();
+      }
+      break;
 
-          CheckIRPresence();
-          if (IRPresence) {
-            token = GET_READINGS;
-            TurnOnGreenLED();
-            StopIR();
-          }
-          SetTimeOrigin();
-          break;
+    case GET_READINGS: {
+      long left  = GetReadings(left_angle);
+      long front = GetReadings(front_angle);
+      long right = GetReadings(right_angle);
 
-      case GET_READINGS:
-        long left = GetReadings(left_angle);
-        long front = GetReadings(front_angle);
-        long right = GetReadings(right_angle);
+      Serial.print("Left: "); Serial.print(left);
+      Serial.print("  Front: "); Serial.print(front);
+      Serial.print("  Right: "); Serial.println(right);
 
-        if (front > DISTANCE_THRESHOLD)
-          MoveForward();
-        else if (left > DISTANCE_THRESHOLD)
-          RotateLeft();
-        else
-          RotateRight();
-            
-        GetTimeElapse();
+      // Steering logic
+      if (front > DISTANCE_THRESHOLD) {
+        MoveForward();
+      } else if (left > DISTANCE_THRESHOLD) {
+        RotateLeft();
+      } else {
+        RotateRight();
+      }
 
-        if (timeElapse > TIME_THRESHOLD)
-          token = STOP;
+      GetTimeElapse();
+      if (timeElapse > TIME_THRESHOLD) token = STOP;
+      delay(100);
+      break;
+    }
 
-        delay(100);
-        break;
-        
-      case STOP:
-       // do what is needed
-      //test if the condition is met before breaking out of this case
-          StopDCMotors();
-          TurnOffGreenLED();
-          break;
+    case STOP:
+      StopDCMotors();
+      TurnOffGreenLED();
+      StopServo();
+      break;
   }
+
   delay(100);
 }
