@@ -6,7 +6,7 @@
 */
 
 /* This project includes 2 servo motors controlling the ultrasonic sensor and 
-   the steering shaft alongside 2 DC motors to control the rear wheels */
+   the steering shaft alongside 2 DC motors to control the front wheels */
 
 #include <Servo.h>
 #include <IRremote.h>
