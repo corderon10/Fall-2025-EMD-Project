@@ -1,7 +1,7 @@
 /*
   Author: Team 7 (merged)
   Date:   11/15/25
-  About:  Wall-Following + Obstacle Check
+  About:  Continuous Wall-Following + Obstacle Check
 */
 
 #include <Servo.h>
@@ -26,42 +26,39 @@
 int rightScan       = 0;     // angle for wall following  
 int forwardAngle    = 90;    // angle for obstacle avoidance
 
-int steeringCenter  = 88;
-int steeringLeft    = 60;
-int steeringRight   = 120;
+int steeringCenter  = 85;
 
 int targetDistance  = 20;    // distance from wall
-int safeDistance    = 30;    // obstacle avoidance distance
+int safeDistance    = 15;    // obstacle avoidance distance
 int scanInterval    = 250;
 
 // ---------------- State ----------------
 bool robotStarted = false;
 unsigned long lastScanTime = 0;
-unsigned long wallFollowStart = 0;
-const unsigned long wallFollowDuration = 5000; // 5 seconds to wall follow
 
-// ----- NEW: Mission Timer -----
+// ----- Mission Timer -----
 unsigned long missionStart = 0;
-const unsigned long missionDuration = 5UL * 60UL * 1000UL; // 5 minute mission timer
+const unsigned long missionDuration = 5UL * 60UL * 1000UL; // 5 minutes
 
-// ---------------- Objects ----------------
 Servo sensorServo;
 Servo steeringServo;
 
-// ---------------- Utility: Distance ----------------
+// ---------------- Distance ----------------
 int getDistance() {
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(2);
+
   digitalWrite(TRIG_PIN, HIGH);
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
 
-  long duration = pulseIn(ECHO_PIN, HIGH, 12000); // up to ~200 cm
+  long duration = pulseIn(ECHO_PIN, HIGH, 12000);
   if (duration == 0) return 0;
+
   return (int)(duration * 0.034 / 2.0);
 }
 
-// ---------------- Motor helper (from obstacle code) ----------------
+// ---------------- Motor Helper ----------------
 void motors(int LI1, int LI2, int RI1, int RI2, int leftPWM, int rightPWM) {
   digitalWrite(LEFT_MOTOR_I1, LI1);
   digitalWrite(LEFT_MOTOR_I2, LI2);
@@ -71,13 +68,13 @@ void motors(int LI1, int LI2, int RI1, int RI2, int leftPWM, int rightPWM) {
   analogWrite(RIGHT_MOTOR_EN, rightPWM);
 }
 
-// ---------------- Movement functions ----------------
+// ---------------- Movement ----------------
 void MoveForward() {
   motors(1,0, 0,1, 100, 100);
 }
 
 void MoveBackward() {
-  steeringServo.write(steeringCenter); // CENTER steering
+  steeringServo.write(steeringCenter);
   motors(0,1, 1,0, 100, 100);
 }
 
@@ -85,12 +82,13 @@ void StopMotors() {
   motors(0,0, 0,0, 0,0);
 }
 
-// ----- Smooth Steering helpers -----
+// ---------------- Micro Steering ----------------
 void microSteerTowardWall() {
-  steeringServo.write(steeringCenter + 10);  // Slight right
+  steeringServo.write(steeringCenter + 5);
 }
+
 void microSteerAwayFromWall() {
-  steeringServo.write(steeringCenter - 10);  // Slight left
+  steeringServo.write(steeringCenter - 5);
 }
 
 // ---------------- Setup ----------------
@@ -100,8 +98,8 @@ void setup() {
   sensorServo.attach(SERVO_SENSOR_PIN);
   steeringServo.attach(SERVO_STEER_PIN);
 
-  sensorServo.write(rightScan);          // RIGHT (ultrasonic sensor servo)
-  steeringServo.write(steeringCenter);   // CENTER (steering servo)
+  sensorServo.write(rightScan);        
+  steeringServo.write(steeringCenter);
 
   pinMode(LEFT_MOTOR_EN, OUTPUT);
   pinMode(RIGHT_MOTOR_EN, OUTPUT);
@@ -124,7 +122,7 @@ void setup() {
 // ---------------- Main Loop ----------------
 void loop() {
 
-  // ----- WAIT FOR IR BUTTON -----
+  // ----- Wait for IR Start Button -----
   if (!robotStarted) {
     if (IrReceiver.decode()) {
       unsigned long code = IrReceiver.decodedIRData.decodedRawData;
@@ -135,76 +133,77 @@ void loop() {
         robotStarted = true;
         digitalWrite(LED, HIGH);
 
-        wallFollowStart = millis();
-        missionStart = millis();       // <------ START MISSION TIMER
+        missionStart = millis();
         lastScanTime = 0;
 
         Serial.println("Robot STARTED!");
       }
       IrReceiver.resume();
     }
+
     StopMotors();
     return;
   }
 
-  // ----- MISSION TIMER CHECK -----
+  // ----- Mission Timer -----
   if (millis() - missionStart >= missionDuration) {
-    Serial.println("MISSION COMPLETE: 5 minutes reached.");
+    Serial.println("MISSION COMPLETE (5 minutes)");
     StopMotors();
     digitalWrite(LED, LOW);
     robotStarted = false;
     return;
   }
 
-  // ----- MAIN BEHAVIOR: wall-following for 5s -----
-  while (robotStarted && (millis() - wallFollowStart) < wallFollowDuration) {
-    MoveForward();
+  // ---------------------------------------
+  //        CONTINUOUS WALL FOLLOWING
+  // ---------------------------------------
+  MoveForward();
 
-    sensorServo.write(rightScan); // RIGHT (ultrasonic sensor servo)
-    delay(150);
+  if (millis() - lastScanTime >= scanInterval) {
 
-    if (millis() - lastScanTime >= scanInterval) {
-      int dist = getDistance();
-      lastScanTime = millis();
+    // Look RIGHT
+    sensorServo.write(rightScan);
+    delay(250);
+    delayMicroseconds(500);
+    int dist = getDistance();
+    lastScanTime = millis();
 
-      Serial.print("Wall follow dist: ");
-      Serial.print(dist);
-      Serial.println(" cm");
+    Serial.print("Wall dist: ");
+    Serial.println(dist);
 
-      if (dist < targetDistance - 5) {
-        microSteerAwayFromWall();
-        Serial.println("Steering away from wall");
-      }
-      else if (dist > targetDistance + 5) {
-        microSteerTowardWall();
-        Serial.println("Steering toward the wall");
-      }
-      else {
-        steeringServo.write(steeringCenter); // CENTER (steering servo)
-      }
+    // Wall-follow logic
+    if (dist == 0 || dist > 150) {
+      microSteerTowardWall();
     }
-
-    delay(100);
+    else if (dist < targetDistance - 5) {
+      microSteerAwayFromWall();
+    }
+    else if (dist > targetDistance + 5) {
+      microSteerTowardWall();
+    }
+    else {
+      steeringServo.write(steeringCenter);
+    }
   }
 
-  // ----- OBSTACLE CHECK -----
-  sensorServo.write(forwardAngle); // FORWARD (90°)
-  delay(200);
+  // ---------------------------------------
+  //        OBSTACLE CHECK (FORWARD)
+  // ---------------------------------------
+  sensorServo.write(forwardAngle);
+  delay(100);
 
   int frontDist = getDistance();
   Serial.print("Front dist: ");
-  Serial.print(frontDist);
-  Serial.println(" cm");
+  Serial.println(frontDist);
 
   if (frontDist > 0 && frontDist < safeDistance) {
-    Serial.println("Obstacle detected: backing up");
+    StopMotors();
+    delay(1000);
+    Serial.println("Obstacle detected: BACKING UP!");
+    delay(200);
     MoveBackward();
     delay(1000);
     StopMotors();
-  } else {
-    Serial.println("No obstacle detected: returning to wall-follow");
+    delay(1000);
   }
-
-  wallFollowStart = millis();
-  lastScanTime = 0;
 }
